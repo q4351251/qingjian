@@ -1,0 +1,58 @@
+name: sync-fork
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-fork
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: "qingjian-team/qingjian"
+  BRANCH: "main"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Verify PAT secret
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          if [ -z "${SYNC_PAT:-}" ]; then
+            echo "::error::repository secret SYNC_PAT is missing; GITHUB_TOKEN cannot push workflow files"
+            exit 1
+          fi
+
+      - name: Sync default branch
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream --prune
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git merge-base --is-ancestor "upstream/${BRANCH}" HEAD; then
+            echo "already up to date"
+            exit 0
+          fi
+
+          if git merge --ff-only "upstream/${BRANCH}"; then
+            echo "fast-forwarded"
+            git push origin "HEAD:${BRANCH}"
+            exit 0
+          fi
+
+          echo "fork is ahead of upstream, replaying local commits on top of upstream"
+          git rebase "upstream/${BRANCH}"
+          git push --force-with-lease origin "HEAD:${BRANCH}"
